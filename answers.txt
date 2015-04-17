@@ -1,0 +1,230 @@
+Name: Jeffrey Jiang
+UCLA ID: 904255069
+
+Collaborators: none
+
+-------------------------------------------------------------------------------
+
+Response to Exercise 1:
+
+Scheduling does in fact save all the registers onto the stack space
+and then brings it back up when it finishes. However, there is no 
+guarentee that the eax register is the same. Although under some 
+circumstances the eax register remains unchanged, such as most of the
+conditions provided by this minilab, there is no guarentee
+by some software or hardware constraints that force eax to remain the same
+through following system calls in other processes. 
+
+Response to Exercise 2: 
+
+In exercise 2, we implement dofork() and copy_stack().
+dofork() is relatively straight-forward given the pseudocode. 
+We implement a method in which we search for a process space that is
+empty, and then we copy all of our information into that new space.
+We change the return address on the child and return. 
+
+In the copy_stack, we essentially find the four values provided
+with respect to their process id, and then we use the memcopy
+function to move all the data bits over. 
+
+Response to Exercise 3: 
+In exercise 3, I essentially add a linked list representing a queue. 
+Therefore, for each process_t object, I add two pointers. One pointer, 
+process_t* p_waiting indicates the first process that is waiting for
+this process to complete (the head of the wait queue). 
+The other pointer, 
+process_t* p_waitNext indicates the next item in the linkedlist. 
+
+As a result, the final structure is as follows: 
+The process being waited upon points to the linked list from p_waiting. 
+Each process in the linked list points to the next with p_waitNext. 
+Each process in the linked list may also contain their own linked list. 
+This structure is made possible because a single process cannot be waiting
+for two processes at the same time. This allows us to have this behavior 
+of having a singly linked list represent the wait queue. 
+Notice that this allows for the robust behavior specified by the specs, 
+in that any process can wait on another process and allows for the queue
+to grow as large as necessary. 
+
+An example structure could be as follows: 
+In this example, processes 2, 3, and 4 are waiting on 1 to complete
+and process 5 is waiting on process 2 to complete. 
+
+Proc1	       
+p_waiting =>   Proc2
+p_waitNext     p_waiting =>  Proc5
+	       p_waitNext => Proc3
+	       		     p_waiting => nullptr
+			     p_waitNext => Proc4
+
+Response to Exercise 4: 
+Given exercise 3, this part is relatively self-explanatory. The idea is
+that a process should remain a zombie process as long as no process has
+already waited for it, which then reaps the process. However, once the
+zombie process awakens one or more threads, we can assume that the 
+zombie process has completed its job and allowed other processes to 
+continue, and so we should deallocate the process storage for another 
+process. Therefore, there are a couple of changes to make, one in 
+case INT_SYS_WAIT, when checking for zombie processes. The other is
+in INT_SYS_EXIT, where the processes are getting reawakened. 
+
+Anything else you'd like us to know:
+
+
+
+Extra credit exercises:
+
+Response to Exercise 5: 
+
+Essentially, the issue that we face comes to pointers. Because the stack
+is copied, we have that normal variables are copied as intended. However, 
+pointer values are also stored on the stack. Therefore, when we copy the
+stack as we do in sys_fork(), the newly created pointer still points to 
+the original variable from the first process. Therefore, we can exploit
+this in miniProcOS, as shown in the start function created below. 
+
+We must use volatile in this case because we do not want the compiler to 
+make an optimization to the xp pointer. For our purposes, we want xp to 
+point to the original x in the parent process, but an optimizer may
+want to point xp to the x in the child process. 
+
+void
+start(void) 
+{
+  int x = 0;
+  int * volatile xp = &x; // the address remains on the stack.
+                          // this causes xp to be able to change 
+                          // another process's data, even if it shouldn't. 
+
+  pid_t p = sys_fork();
+  if (p==0)
+    {
+      x++;
+      if ( *xp == 0 )
+	*xp += 1; 
+    }
+  else if (p > 0)
+    sys_wait(p); // assume blocking implementation
+  app_printf("%d", x);
+  sys_exit(0);
+}
+
+Response to Exercise 6: 
+
+This function that we create should be relatively similar to our current 
+do_fork() function. In fact, this new function is essentially creating
+a "create new process" function except done with threads in mind, instead
+of processes.  If we want to create a thread, we can replace do_fork() in 
+the interrupt method to sys_newthread(). We still need to: 
+1. Find an empty process. 
+2. Set up the empty process. 
+
+The main difference comes in part 2, where the process starts with an
+empty stack. Other than copying the registers over, however, we must also
+consider where the registers must point. Like the do_fork() method, 
+eax should be zero afterward, but eip should start at start_function to
+begin running the start_function for the thread. Therefore, the function
+should look as follows: 
+
+// in mpos-app.h (similar to sys_fork, except we pass it start_function.
+static inline int
+sys_newthread(void (*start_function)(void))
+{
+  int retval;
+  asm volatile("int %1\n"
+           : "=a" (retval)
+           : "i" (INT_SYS_THREAD), //defined as 53 in mpos.h
+             "a" (start_function)
+           : "cc", "memory");
+  return retval;
+}
+
+// in interrupt of mpos-kern.c
+case INT_SYS_THREAD: {
+
+  void (*start_function)(void) = current->p_registers.reg_eax;
+ 
+  // search for available processes. 
+  process_t *avail;
+  int offset = 1;
+  while(1) {
+    if (offset == NPROCS)
+      return -1;
+    avail = &(proc_array[offset]);
+    if (avail->p_state == P_EMPTY)
+      break;
+    offset++;
+  }
+  
+  // set up process space. these are the same as a child process: 
+  avail->p_state = P_RUNNABLE;
+  avail->p_waiting = NULL;
+  avail->p_waitNext = NULL;
+  // threads have their own registers.
+  // some important registers, though: 
+  uint32_t stack_top = PROC1_STACK_ADDR + PROC_STACK_SIZE * avail->p_pid;
+  avail->p_registers.reg_esp = stack_top; //initializes empty stack.
+                                          //previous stack will not be read
+  avail->p_registers.reg_eax = 0; // like the child, return 0 for new thread
+  avail->p_registers.reg_eip = (uint32_t) start_function; // biggest diff!
+  // previously this register was directly copied from parent to child. 
+  // now the new thread will start not at the same spot as a process, 
+  // but at a function. 
+  return avail->p_pid;
+}
+
+Response for Exercise 7: 
+
+We can make this function as a mixture between sys_wait and sys_exit
+For the most part, it actus like sys_wait, but the final removal of the 
+program should be the same as sys_exit.  
+
+// in mpos-app.h (exact copy of sys_wait(pid_t pid)
+static inline int
+sys_kill(pid_t pid)
+{
+  int retval;
+  asm volatile("int %1\n"
+           : "=a" (retval)
+           : "i" (INT_SYS_KILL), //defined as 54 in mpos.h
+             "a" (pid)
+           : "cc", "memory");
+  return retval;
+}
+
+// in interrupt function of mpos-kern.c
+case INT_SYS_KILL: { 
+  pid_t p = current->p_registers.reg_eax;
+
+  if (p <= 0 || p >= NPROCS || p == current->p_pid
+      || proc_array[p].p_state == P_EMPTY)
+    current->p_registers.reg_eax = -1; // no proc to kill. 
+  else if (proc_array[p].p_state == P_ZOMBIE) //process is already dead.
+    current->p_registers.reg_eax = proc_array[p].p_exit_status;
+  else // there is a process to be killed. 
+    {
+      // act as if sys_exit has been called. 
+      process_t* condemned = &(proc_array[p]);
+      condemned->p_state = P_ZOMBIE; // kill the process
+      current->p_registers.reg_eax = condemned->p_exit_status;
+
+      // wake any sleeping processes. 
+      process_t* proc = current->p_waiting;
+      process_t* temp;
+      current->p_waiting = NULL;
+      
+      while(proc != NULL)
+        {
+          if ( proc->p_state == P_BLOCKED)
+	    {
+	      proc->p_state = P_RUNNABLE;
+	      proc->p_registers.reg_eax = current->p_exit_status;
+	    }
+	  temp = proc;
+	  proc = proc->p_waitNext;
+	  temp->p_waitNext = NULL;
+	  condemned->p_state = P_EMPTY;
+	}
+    }
+  run(current);
+}

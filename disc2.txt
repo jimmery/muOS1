@@ -1,0 +1,153 @@
+Discussion 2: 
+
+Minilab 1: use CS111-35-ubuntu image
+
+System Calls
+  provided to the user. 
+interrupt handling. 
+  this is in the kernel. 
+
+Processes of system calls. 
+  make system call
+  generates an interrupt (software)
+  interrupt current exeution of CPU
+  switch mode frmo user to kernel. 
+
+Minilab 1 is to implement an interrupt handler. 
+
+Hardware interrupt vs. software interrupt. 
+  Hardware: PIC = programmable interrupt controller.
+    blocking. 
+    singlas. 
+mpos-app.h contains the definition of system calls (provided)
+  "int X" is the interrupt instruction (in assembly)
+  X is an integer corresponding ot the interrupt code. 
+    privileged instruction. 
+  interrupt handler contains a switch statement
+    #define FORK_SYSTEM_CALL 180 // or some other arbitrary number. 
+    switch( int no.)
+      case FORK_SYSTEM_CALL:
+      ...
+  each case corresponds to a certain system call.   
+
+example of a system call: 
+
+// creates a child process. 
+// child process contains exactly the same information as parent.
+// except in its own stack and with a different pid.
+// stack content is the same between them. 
+
+int i = fork(); // returns 0 to child process
+		// returns PID of child to parent. 
+if ( i == 0 ) {
+  printf("a"); // child will print a.
+} else {
+  printf("b"); // parent will print b. 
+}
+
+// this does not provide deterministic outputs. 
+// we don't know if a prints first or b prints first. 
+
+#INT_SYS_FORK 2 // some number. note that this is an immediate. 
+
+static inline pid_t
+sys_fork(void)
+{
+  pid_t result; // pid_t is some unsigned int
+  // asm implies assembly language. volatile is optional.
+  // %0 - %9 are the operands. 
+  // a, i are registers. a is eax. b is ebx. ... 
+  asm volatile(   "int%1\n"     // interrupt with %1 as code
+		: "=a" (result) // output ( result = a = %0? ) [= means write only]. 
+		: "i" (INT_SYS_FORK)    // i means that this is an immediate field. (not a register)
+					// input (copies i = %1) [no = means you copy (i = INT_SYS_FORK)]
+		: "cc", "memory" ); // we don't need to know this last line. 
+				    // restrictions on the compiler. 
+  return result;
+}
+
+
+example 2 (mov); 
+int a = 10, b;
+b = a;
+asm volatile(     "movl%1,%0\n" // %1 is a, %0 is b. 
+		: "=r" (b) // r dictates "any register"
+		: "r" (a) );
+// notice that there is no 4th line here. 
+
+it seems this is a definition of an assembly line statement. 
+
+
+We want to implement 4 system calls in minilab 1. 
+mpos-kern.c
+
+void interrupt ( registers_t *reg )
+{
+  current -> p_registers = *reg; // current refers to the current process. (its context). 
+  switch( reg->reg_int no ) // comes from the int %1 call from above. 
+  {
+    case INT_SYS_FORK: 
+      current->p_registers.reg_eax = do_fork(current); // we implement do_fork. 
+      run(current); // switches back to the current process. 
+    ...
+    case INT_SYS)WAIT: 
+    ...
+    default: 
+      while(1);
+  }
+}
+
+asm calls an assembly language call to go into kernel mode. 
+run(current) resumes the user process. 
+
+extra credit? where?
+
+static pid_t
+do_fork( process_t *parent )
+{
+  process_t *avail; // look at the definition of a process_t. 
+  int offset = 1;
+  while (1) {
+    if ( offset == NPROCS )
+      return -1;
+    avail = &(pros_array[offset]);
+    if ( avail->p_state == P_EMPTY )
+      break;
+    offset++;
+  }
+  // we found a process! :D
+
+  // we have to copy content of stacks and registers
+  avail -> p_registers = parent -> p_registers;
+  copy_stack(avail, parent);
+  avail -> p_state = P_RUNNABLE; 
+  avail -> p_registers.reg_eax = 0; // child returns 0;
+  return avail-> p_pid;
+}
+		
+static void
+copy_stack ( process_t *dest, process_t *src )
+{
+  uint32_t src_stack_top = PROC1_STACK_ADDR + (PROC_STACK_SIZE * (src->p_pid));
+  uint32_t src_stack_bottom = src->p_registers.reg_esp; // not actually the bottom. just the extent we have used it to. the "end"
+  uint32_t dest_stack_top = PROC1_STACK_ADDR + (PROC_STACK_SIZE * (dest->p_pid));
+  uint32_t dest_stack_bottom = src_stack_bottom + (PROC_STACK_SIZE * (dest->p_pid - src->p_pid));
+  memcpy((void*) dest_stack_bottom, (void*) src_stack_bottom, src_stack_top - src_stack_bottom));
+  dest->p_registers.reg_esp = dest_stack_bottom;
+}
+
+
+Stack Illustration. 
+
+|		|		|		|
+grows <======	^
+	     first stack
+
+
+Exercise 3: Blocking wait. 
+
+
+
+
+
+
